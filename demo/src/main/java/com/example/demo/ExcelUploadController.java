@@ -16,7 +16,8 @@ import java.io.InputStream;
 
 @RestController
 @RequestMapping("/api/excel")
-@CrossOrigin(origins = "http://65.0.19.161:3001") // adjust for frontend port
+@CrossOrigin(origins = "http://13.232.220.117:3001
+") // adjust for frontend port
 public class ExcelUploadController {
 
     @Autowired

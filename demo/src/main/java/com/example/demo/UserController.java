@@ -6,7 +6,8 @@ import org.springframework.web.bind.annotation.*;
 import java.util.List;
 
 @RestController
-@CrossOrigin(origins = "http://65.0.19.161:3001")
+@CrossOrigin(origins = "http://13.232.220.117:3001
+")
 @RequestMapping("/users")
 public class UserController {
 
