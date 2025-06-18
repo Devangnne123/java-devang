@@ -11,7 +11,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/auth")
-@CrossOrigin(origins = "http://localhost:5173") // Allow React dev server
+@CrossOrigin(origins = "http://65.0.19.161:3001") // Allow React dev server
 public class AuthController {
 
     @Autowired
