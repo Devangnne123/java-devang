@@ -11,7 +11,7 @@ import java.util.Map;
 
 @RestController
 @RequestMapping("/api/auth")
-@CrossOrigin(origins = "http://13.232.220.117:3001") // Allow React dev server
+@CrossOrigin(origins = "http://3.109.203.132:3001") // Allow React dev server
 public class AuthController {
 
     @Autowired
@@ -33,7 +33,10 @@ public class AuthController {
         response.put("message", "Login successful");
         response.put("email", user.getEmail());
         response.put("userKey", user.getUserKey());
-
+        response.put("name", user.getName()); // Add name if available
+        response.put("searchCount", user.getSearchCount()); // Add search count
+        response.put("searchLimit",user.getSearchLimit());
+        response.put("credits",user.getCredits());
         return ResponseEntity.ok(response);
     }
 }
