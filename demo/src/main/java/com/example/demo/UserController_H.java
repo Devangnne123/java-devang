@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 
 @RestController
-@CrossOrigin(origins = "http://3.109.203.132:3001")
+@CrossOrigin(origins = "http://13.203.218.236:3001")
 @RequestMapping("/api/user")
 public class UserController_H {
 

@@ -10,7 +10,7 @@ import java.time.LocalDateTime;
 
 @RestController
 @RequestMapping("/api/data")
-@CrossOrigin(origins = "http://3.109.203.132:3001")
+@CrossOrigin(origins = "http://13.203.218.236:3001")
 public class DataController {
 
     @Autowired

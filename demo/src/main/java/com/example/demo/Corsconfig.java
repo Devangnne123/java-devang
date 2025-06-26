@@ -19,7 +19,7 @@ public class Corsconfig {
             @Override
             public void addCorsMappings(CorsRegistry registry) {
                 registry.addMapping("/**") // all paths
-                        .allowedOrigins("http://3.109.203.132:3001") // allow your frontend
+                        .allowedOrigins("http://13.203.218.236:3001") // allow your frontend
                         .allowedMethods("GET", "POST", "PUT", "DELETE")
                         .allowedHeaders("*");
             }
