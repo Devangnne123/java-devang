@@ -3,41 +3,60 @@ package com.example.demo;
 import jakarta.persistence.*;
 import java.util.List;
 import java.util.ArrayList;
+import com.fasterxml.jackson.annotation.*;
+
 @Entity
-@Table(name = "users")
+@Table(name = "users", uniqueConstraints = {
+        @UniqueConstraint(columnNames = "email"),
+        @UniqueConstraint(columnNames = "userKey")
+})
 public class User {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    @Column(nullable = false)
     private String name;
-    private String email;
-    private String password;
-    private String userKey;  // renamed from 'key' as 'key' is a reserved word
 
+    @Column(nullable = false, unique = true)
+    private String email;
+
+    @Column(nullable = false)
+    private String password;
+
+    @Column(nullable = false, unique = true)
+    private String userKey;
+
+    @Column(nullable = false)
     private Integer searchCount = 0;
+
+    @Column(nullable = false)
     private Integer searchLimit = 10;
 
-    // New field: Credits (initialized to 0 by default)
+    @Column(nullable = false)
     private Integer credits = 10;
 
-    private Integer searchCount_Cost =2;
+    @Column(nullable = false)
+    private Integer searchCount_Cost = 2;
+
+    @Column(nullable = false)
+    private Integer key = 1;  // New field with default value 1
 
 
+    @Column(name = "reset_password_otp")
+    private String resetPasswordOtp;
+
+    @Column(name = "otp_expiry_time")
+    private Long otpExpiryTime;
+
+
+
+    @JsonManagedReference
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL)
     private List<SearchHistory> searchHistory = new ArrayList<>();
 
-    // Getters & Setters
-    public List<SearchHistory> getSearchHistory() { return searchHistory; }
-    public void setSearchHistory(List<SearchHistory> searchHistory) {
-        this.searchHistory = searchHistory;
-    }
-
-
-
-
-    // Constructors
+    // Constructors, getters and setters remain the same
     public User() {}
 
     public User(String name, String email, String password, String userKey) {
@@ -76,5 +95,15 @@ public class User {
     public Integer getSearchCount_Cost() { return searchCount_Cost; }
     public void setSearchCount_Cost(Integer searchCount_Cost) { this.searchCount_Cost = searchCount_Cost; }
 
+    // New getter and setter for key
+    public Integer getKey() { return key; }
+    public void setKey(Integer key) { this.key = key; }
+
+    // Getters and setters for new fields
+    public String getResetPasswordOtp() { return resetPasswordOtp; }
+    public void setResetPasswordOtp(String resetPasswordOtp) { this.resetPasswordOtp = resetPasswordOtp; }
+
+    public Long getOtpExpiryTime() { return otpExpiryTime; }
+    public void setOtpExpiryTime(Long otpExpiryTime) { this.otpExpiryTime = otpExpiryTime; }
 
 }

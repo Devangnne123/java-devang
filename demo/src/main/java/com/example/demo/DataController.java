@@ -7,6 +7,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.Optional;
 import java.time.LocalDateTime;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Deque;
+import java.util.LinkedList;
+import java.time.temporal.ChronoUnit;
 
 @RestController
 @RequestMapping("/api/data")
@@ -22,13 +26,39 @@ public class DataController {
     @Autowired
     private SearchHistoryRepository searchHistoryRepository;
 
+    // Rate limiting storage - tracks request timestamps per user
+    private final Map<String, Deque<LocalDateTime>> requestTimestamps = new ConcurrentHashMap<>();
+    private static final int RATE_LIMIT = 100; // 10 requests
+    private static final int RATE_LIMIT_WINDOW_MINUTES = 1; // per minute
+
     @PostMapping("/linkedin")
     public ResponseEntity<?> getLinkedInData(
             @RequestBody LinkedinRequest request) {
 
         try {
+            // 0. Check rate limit
+            String userKey = request.getUserKey();
+            Deque<LocalDateTime> timestamps = requestTimestamps.computeIfAbsent(userKey, k -> new LinkedList<>());
+
+            LocalDateTime now = LocalDateTime.now();
+            LocalDateTime cutoff = now.minus(RATE_LIMIT_WINDOW_MINUTES, ChronoUnit.MINUTES);
+
+            // Remove old timestamps outside the 1-minute window
+            while (!timestamps.isEmpty() && timestamps.peekFirst().isBefore(cutoff)) {
+                timestamps.removeFirst();
+            }
+
+            // Check if limit exceeded
+            if (timestamps.size() >= RATE_LIMIT) {
+                return ResponseEntity.status(429).body(Map.of(
+                        "success", false,
+                        "message", "Rate limit exceeded - maximum " + RATE_LIMIT + " requests per minute",
+                        "retryAfterSeconds", ChronoUnit.SECONDS.between(now, timestamps.peekFirst().plusMinutes(1))
+                ));
+            }
+
             // 1. Verify the user exists with this key
-            Optional<User> userOptional = userRepository.findByUserKey(request.getUserKey());
+            Optional<User> userOptional = userRepository.findByUserKey(userKey);
             if (userOptional.isEmpty()) {
                 return ResponseEntity.badRequest().body(Map.of(
                         "success", false,
@@ -82,10 +112,13 @@ public class DataController {
             history.setCreditsDeducted(user.getSearchCount_Cost());
             history.setSearchCount(user.getSearchCount());
             history.setRemainingCredits(user.getCredits());
-
             history.setSearchLimit(user.getSearchLimit());
-            history.setSearchDate(LocalDateTime.now());
+            history.setSearchDate(now);
             searchHistoryRepository.save(history);
+
+            // Update rate limit tracking
+            timestamps.addLast(now);
+            requestTimestamps.put(userKey, timestamps);
 
             // 7. Return the data with updated counts
             return ResponseEntity.ok(Map.of(
@@ -104,7 +137,6 @@ public class DataController {
         }
     }
 }
-
 class LinkedinRequest {
     private String userKey;
     private String linkedinUrl;

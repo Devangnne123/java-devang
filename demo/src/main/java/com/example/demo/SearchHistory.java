@@ -2,7 +2,7 @@ package com.example.demo;
 
 import jakarta.persistence.*;
 import java.time.LocalDateTime;
-
+import com.fasterxml.jackson.annotation.*;
 @Entity
 @Table(name = "search_history")
 public class SearchHistory {
@@ -10,7 +10,7 @@ public class SearchHistory {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
-
+    @JsonBackReference
     @ManyToOne
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
