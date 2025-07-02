@@ -6,6 +6,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -17,14 +18,11 @@ public class UserManagementController {
     @Autowired
     private UserRepository userRepository;
 
+    @Autowired
+    private CreditHistoryRepository creditHistoryRepository;
+
     private static final int ADMIN_KEY = 23;
 
-    /**
-     * Checks if the user with the given email and key has admin privileges
-     * @param email The email from the request header
-     * @param key The key from the request header
-     * @return ResponseEntity with error if access denied, or null if access granted
-     */
     private ResponseEntity<?> verifyAdminAccess(String email, Integer key) {
         if (email == null || email.isEmpty()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
@@ -42,13 +40,12 @@ public class UserManagementController {
                     .body("User not found with email: " + email);
         }
 
-        // Verify both the passed key and the user's key match ADMIN_KEY
         if (user.getKey() != ADMIN_KEY || key != ADMIN_KEY) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
                     .body("Access denied. Admin privileges required");
         }
 
-        return null; // Access granted
+        return null;
     }
 
     @GetMapping
@@ -99,7 +96,8 @@ public class UserManagementController {
                     .body("Error: Email is already taken!");
         }
 
-        if (userRepository.existsByUserKey(request.getUserKey())) {
+        if (request.getUserKey() != null && !request.getUserKey().isEmpty() &&
+                userRepository.existsByUserKey(request.getUserKey())) {
             return ResponseEntity.badRequest()
                     .body("Error: UserKey is already taken!");
         }
@@ -110,9 +108,10 @@ public class UserManagementController {
                 request.getPassword(),
                 request.getUserKey()
         );
-        newUser.setCredits(request.getCredits());
-        newUser.setSearchCount_Cost(request.getSearchCount_Cost());
-        newUser.setKey(request.getKey());
+        newUser.setCredits(request.getCredits() != null ? request.getCredits() : 10);
+        newUser.setSearchCount_Cost(request.getSearchCount_Cost() != null ? request.getSearchCount_Cost() : 2);
+        newUser.setSearchLimit(request.getSearchLimit() != null ? request.getSearchLimit() : 10);
+        newUser.setKey(request.getKey() != null ? request.getKey() : 1);
 
         User savedUser = userRepository.save(newUser);
         return ResponseEntity.ok(new UserDTO(savedUser));
@@ -130,17 +129,44 @@ public class UserManagementController {
 
         return userRepository.findById(id)
                 .map(user -> {
-                    if (request.getName() != null) user.setName(request.getName());
-                    if (request.getEmail() != null) user.setEmail(request.getEmail());
-                    if (request.getPassword() != null) user.setPassword(request.getPassword());
-                    if (request.getUserKey() != null) user.setUserKey(request.getUserKey());
-                    if (request.getCredits() != null) user.setCredits(request.getCredits());
-                    if (request.getSearchCount_Cost() != null)
-                        user.setSearchCount_Cost(request.getSearchCount_Cost());
-                    if (request.getSearchCount() != null)
-                        user.setSearchCount(request.getSearchCount());
-                    if (request.getKey() != null)
+                    int oldCredits = user.getCredits();
+
+                    if (request.getCredits() != null) {
+                        int newCredits = user.getCredits() + request.getCredits();
+                        user.setCredits(Math.max(0, newCredits));
+
+                        // Record credit history
+                        if (request.getCredits() != 0) {
+                            CreditHistory history = new CreditHistory();
+                            history.setUser(user);
+                            history.setAmount(Math.abs(request.getCredits()));
+                            history.setActionType(request.getCredits() > 0 ? "ADD" : "DEDUCT");
+                            history.setDescription(request.getDescription() != null ?
+                                    request.getDescription() : "Admin adjustment");
+                            history.setAdminEmail(email);
+                            creditHistoryRepository.save(history);
+                        }
+                    }
+
+                    if (request.getSearchCount_Cost() != null) {
+                        user.setSearchCount_Cost(Math.max(1, request.getSearchCount_Cost()));
+                    }
+
+                    if (request.getSearchCount() != null) {
+                        user.setSearchCount(Math.max(0, request.getSearchCount()));
+                    }
+
+                    if (request.getSearchLimit() != null) {
+                        user.setSearchLimit(Math.max(0, request.getSearchLimit()));
+                    }
+
+                    if (request.getUserKey() != null) {
+                        user.setUserKey(request.getUserKey());
+                    }
+
+                    if (request.getKey() != null) {
                         user.setKey(request.getKey());
+                    }
 
                     User updatedUser = userRepository.save(user);
                     return ResponseEntity.ok(new UserDTO(updatedUser));
@@ -164,16 +190,16 @@ public class UserManagementController {
         return ResponseEntity.notFound().build();
     }
 }
-
-// DTO classes remain the same as in your original code
 class UserCreateRequest {
     private String name;
     private String email;
     private String password;
     private String userKey;
-    private Integer credits = 10;
-    private Integer searchCount_Cost = 2;
-    private Integer key = 1; // Default to regular user
+    private Integer credits;
+    private Integer searchCount_Cost;
+    private Integer searchLimit;
+    private Integer key;
+
 
     // Getters and setters
     public String getName() { return name; }
@@ -190,11 +216,12 @@ class UserCreateRequest {
     public void setSearchCount_Cost(Integer searchCount_Cost) {
         this.searchCount_Cost = searchCount_Cost;
     }
+    public Integer getSearchLimit() { return searchLimit; }
+    public void setSearchLimit(Integer searchLimit) { this.searchLimit = searchLimit; }
     public Integer getKey() { return key; }
     public void setKey(Integer key) { this.key = key; }
 }
 
-// DTO for updating users
 class UserUpdateRequest {
     private String name;
     private String email;
@@ -203,7 +230,11 @@ class UserUpdateRequest {
     private Integer credits;
     private Integer searchCount_Cost;
     private Integer searchCount;
+    private Integer searchLimit;
     private Integer key;
+
+    private String description; // New field for history description
+
 
     // Getters and setters
     public String getName() { return name; }
@@ -222,8 +253,12 @@ class UserUpdateRequest {
     }
     public Integer getSearchCount() { return searchCount; }
     public void setSearchCount(Integer searchCount) { this.searchCount = searchCount; }
+    public Integer getSearchLimit() { return searchLimit; }
+    public void setSearchLimit(Integer searchLimit) { this.searchLimit = searchLimit; }
     public Integer getKey() { return key; }
     public void setKey(Integer key) { this.key = key; }
+    public String getDescription() { return description; }
+    public void setDescription(String description) { this.description = description; }
 }
 
 class UserDTO {

@@ -52,9 +52,14 @@ public class User {
 
 
 
+
+
+
     @JsonManagedReference
     @OneToMany(mappedBy = "user", cascade = CascadeType.ALL)
     private List<SearchHistory> searchHistory = new ArrayList<>();
+    @OneToMany(mappedBy = "user", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<CreditHistory> creditHistory;
 
     // Constructors, getters and setters remain the same
     public User() {}

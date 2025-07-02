@@ -45,6 +45,7 @@ public class AuthController {
         response.put("searchLimit",user.getSearchLimit());
         response.put("credits",user.getCredits());
         response.put("key",user.getKey());
+        response.put("id",user.getId());
         return ResponseEntity.ok(response);
     }
 
