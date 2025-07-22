@@ -16,7 +16,7 @@ import jakarta.servlet.http.HttpServletRequest;  // ✅ Correct for Spring Boot 
 
 @RestController
 @RequestMapping("/api/data")
-@CrossOrigin(origins = "http://13.203.218.236:3005")
+@CrossOrigin(origins = "http://13.203.218.236:3001")
 public class DataController {
 
     @Autowired
