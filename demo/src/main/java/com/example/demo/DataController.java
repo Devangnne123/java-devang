@@ -11,10 +11,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.Deque;
 import java.util.LinkedList;
 import java.time.temporal.ChronoUnit;
+import java.util.concurrent.locks.ReentrantLock;
+import jakarta.servlet.http.HttpServletRequest;  // ✅ Correct for Spring Boot 3.x
 
 @RestController
 @RequestMapping("/api/data")
-@CrossOrigin(origins = "http://13.203.218.236:3001")
+@CrossOrigin(origins = "http://13.203.218.236:3005")
 public class DataController {
 
     @Autowired
@@ -28,116 +30,156 @@ public class DataController {
 
     // Rate limiting storage - tracks request timestamps per user
     private final Map<String, Deque<LocalDateTime>> requestTimestamps = new ConcurrentHashMap<>();
-    private static final int RATE_LIMIT = 100; // 10 requests
+
+    // Lock per user to ensure sequential processing
+    private final Map<String, ReentrantLock> userLocks = new ConcurrentHashMap<>();
+
+    private static final int RATE_LIMIT = 100; // requests
     private static final int RATE_LIMIT_WINDOW_MINUTES = 1; // per minute
 
     @PostMapping("/linkedin")
     public ResponseEntity<?> getLinkedInData(
-            @RequestBody LinkedinRequest request) {
+            @RequestBody LinkedinRequest request,
+            HttpServletRequest httpRequest) {
+
+        String userKey = request.getUserKey();
+        String clientIp = getClientIp(httpRequest);
+
+        System.out.println("Request received from IP: " + clientIp + " for user: " + userKey);
+
+        ReentrantLock userLock = userLocks.computeIfAbsent(userKey, k -> new ReentrantLock());
 
         try {
-            // 0. Check rate limit
-            String userKey = request.getUserKey();
-            Deque<LocalDateTime> timestamps = requestTimestamps.computeIfAbsent(userKey, k -> new LinkedList<>());
+            // Acquire lock for this user (will wait if another request is in progress)
+            userLock.lock();
 
-            LocalDateTime now = LocalDateTime.now();
-            LocalDateTime cutoff = now.minus(RATE_LIMIT_WINDOW_MINUTES, ChronoUnit.MINUTES);
+            try {
+                // 0. Check rate limit
+                Deque<LocalDateTime> timestamps = requestTimestamps.computeIfAbsent(userKey, k -> new LinkedList<>());
 
-            // Remove old timestamps outside the 1-minute window
-            while (!timestamps.isEmpty() && timestamps.peekFirst().isBefore(cutoff)) {
-                timestamps.removeFirst();
-            }
+                LocalDateTime now = LocalDateTime.now();
+                LocalDateTime cutoff = now.minus(RATE_LIMIT_WINDOW_MINUTES, ChronoUnit.MINUTES);
 
-            // Check if limit exceeded
-            if (timestamps.size() >= RATE_LIMIT) {
-                return ResponseEntity.status(429).body(Map.of(
-                        "success", false,
-                        "message", "Rate limit exceeded - maximum " + RATE_LIMIT + " requests per minute",
-                        "retryAfterSeconds", ChronoUnit.SECONDS.between(now, timestamps.peekFirst().plusMinutes(1))
-                ));
-            }
+                // Remove old timestamps outside the window
+                while (!timestamps.isEmpty() && timestamps.peekFirst().isBefore(cutoff)) {
+                    timestamps.removeFirst();
+                }
 
-            // 1. Verify the user exists with this key
-            Optional<User> userOptional = userRepository.findByUserKey(userKey);
-            if (userOptional.isEmpty()) {
-                return ResponseEntity.badRequest().body(Map.of(
-                        "success", false,
-                        "message", "Invalid user key"
-                ));
-            }
+                if (timestamps.size() >= RATE_LIMIT) {
+                    return ResponseEntity.status(429).body(Map.of(
+                            "success", false,
+                            "message", "Rate limit exceeded - maximum " + RATE_LIMIT + " requests per minute",
+                            "retryAfterSeconds", ChronoUnit.SECONDS.between(now, timestamps.peekFirst().plusMinutes(1))
+                    ));
+                }
 
-            User user = userOptional.get();
+                // 1. Verify user exists
+                Optional<User> userOptional = userRepository.findByUserKey(userKey);
+                if (userOptional.isEmpty()) {
+                    return ResponseEntity.badRequest().body(Map.of(
+                            "success", false,
+                            "message", "Invalid user key"
+                    ));
+                }
 
-            // 2. Check if user has reached search limit
-            if (user.getSearchCount() >= user.getSearchLimit()) {
+                User user = userOptional.get();
+
+                // 2. Check search limit
+                if (user.getSearchCount() >= user.getSearchLimit()) {
+                    return ResponseEntity.ok(Map.of(
+                            "success", false,
+                            "message", "Search limit reached",
+                            "searchCount", user.getSearchCount(),
+                            "searchLimit", user.getSearchLimit(),
+                            "credits", user.getCredits()
+                    ));
+                }
+
+                // 3. Check credits
+                if (user.getCredits() < user.getSearchCount_Cost()) {
+                    return ResponseEntity.ok(Map.of(
+                            "success", false,
+                            "message", "Insufficient credits",
+                            "searchCount", user.getSearchCount(),
+                            "searchLimit", user.getSearchLimit(),
+                            "credits", user.getCredits(),
+                            "searchCost", user.getSearchCount_Cost()
+                    ));
+                }
+
+                // 4. Find data
+                ExcelData data = excelDataRepository.findByLinkedinUrl(request.getLinkedinUrl());
+                if (data == null) {
+                    return ResponseEntity.ok(Map.of(
+                            "success", false,
+                            "message", "No data found for this LinkedIn URL"
+                    ));
+                }
+
+                // 5. Update user stats
+                user.setCredits(user.getCredits() - user.getSearchCount_Cost());
+                user.setSearchCount(user.getSearchCount() + 1);
+                userRepository.save(user);
+
+                // 6. Record history with IP address
+                SearchHistory history = new SearchHistory();
+                history.setUser(user);
+                history.setLinkedinUrl(request.getLinkedinUrl());
+                history.setClientIp(clientIp);
+                history.setCreditsDeducted(user.getSearchCount_Cost());
+                history.setSearchCount(user.getSearchCount());
+                history.setRemainingCredits(user.getCredits());
+                history.setSearchLimit(user.getSearchLimit());
+                history.setSearchDate(now);
+                searchHistoryRepository.save(history);
+
+                // Update rate limit
+                timestamps.addLast(now);
+                requestTimestamps.put(userKey, timestamps);
+
                 return ResponseEntity.ok(Map.of(
-                        "success", false,
-                        "message", "Search limit reached",
-                        "searchCount", user.getSearchCount(),
-                        "searchLimit", user.getSearchLimit(),
-                        "credits", user.getCredits()
-                ));
-            }
-
-            // 3. Check if user has enough credits
-            if (user.getCredits() < user.getSearchCount_Cost()) {
-                return ResponseEntity.ok(Map.of(
-                        "success", false,
-                        "message", "Insufficient credits",
+                        "success", true,
+                        "data", data,
                         "searchCount", user.getSearchCount(),
                         "searchLimit", user.getSearchLimit(),
                         "credits", user.getCredits(),
-                        "searchCost", user.getSearchCount_Cost()
+                        "clientIp", clientIp  // Optional: return IP in response
                 ));
+
+            } finally {
+                // Always release the lock
+                userLock.unlock();
             }
-
-            // 4. Find data by LinkedIn URL
-            ExcelData data = excelDataRepository.findByLinkedinUrl(request.getLinkedinUrl());
-            if (data == null) {
-                return ResponseEntity.ok(Map.of(
-                        "success", false,
-                        "message", "No data found for this LinkedIn URL"
-                ));
-            }
-
-            // 5. Deduct credits, increment search count, and save the user
-            user.setCredits(user.getCredits() - user.getSearchCount_Cost());
-            user.setSearchCount(user.getSearchCount() + 1);
-            userRepository.save(user);
-
-            // 6. Record the search in history
-            SearchHistory history = new SearchHistory();
-            history.setUser(user);
-            history.setLinkedinUrl(request.getLinkedinUrl());
-            history.setCreditsDeducted(user.getSearchCount_Cost());
-            history.setSearchCount(user.getSearchCount());
-            history.setRemainingCredits(user.getCredits());
-            history.setSearchLimit(user.getSearchLimit());
-            history.setSearchDate(now);
-            searchHistoryRepository.save(history);
-
-            // Update rate limit tracking
-            timestamps.addLast(now);
-            requestTimestamps.put(userKey, timestamps);
-
-            // 7. Return the data with updated counts
-            return ResponseEntity.ok(Map.of(
-                    "success", true,
-                    "data", data,
-                    "searchCount", user.getSearchCount(),
-                    "searchLimit", user.getSearchLimit(),
-                    "credits", user.getCredits()
-            ));
 
         } catch (Exception e) {
             return ResponseEntity.internalServerError().body(Map.of(
                     "success", false,
-                    "message", "Error processing request"
+                    "message", "Error processing request",
+                    "clientIp", clientIp
             ));
         }
     }
-}
 
+    private String getClientIp(HttpServletRequest request) {
+        String ipAddress = request.getHeader("X-Forwarded-For");
+        if (ipAddress == null || ipAddress.isEmpty() || "unknown".equalsIgnoreCase(ipAddress)) {
+            ipAddress = request.getHeader("Proxy-Client-IP");
+        }
+        if (ipAddress == null || ipAddress.isEmpty() || "unknown".equalsIgnoreCase(ipAddress)) {
+            ipAddress = request.getHeader("WL-Proxy-Client-IP");
+        }
+        if (ipAddress == null || ipAddress.isEmpty() || "unknown".equalsIgnoreCase(ipAddress)) {
+            ipAddress = request.getRemoteAddr();
+        }
+
+        // In case of multiple IPs (X-Forwarded-For may contain multiple IPs separated by commas)
+        if (ipAddress != null && ipAddress.contains(",")) {
+            ipAddress = ipAddress.split(",")[0].trim();
+        }
+
+        return ipAddress;
+    }
+}
 
 class LinkedinRequest {
     private String userKey;

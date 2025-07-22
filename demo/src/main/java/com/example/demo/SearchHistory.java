@@ -24,6 +24,10 @@ public class SearchHistory {
 
 
     private Integer remainingCredits;
+
+    @Column(name = "client_ip")
+    private String clientIp;
+
     // Getters & Setters
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
@@ -47,4 +51,7 @@ public class SearchHistory {
 
     public Integer getRemainingCredits() { return remainingCredits; }
     public void setRemainingCredits(Integer remainingCredits) { this.remainingCredits = remainingCredits; }
+
+    public String getClientIp() { return clientIp; }
+    public void setClientIp(String clientIp) { this.clientIp = clientIp; }
 }

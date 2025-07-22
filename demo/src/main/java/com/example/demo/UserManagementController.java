@@ -11,7 +11,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 @RestController
-@CrossOrigin(origins = "http://13.203.218.236:3001")
+@CrossOrigin(origins = "http://13.203.218.236:3005")
 @RequestMapping("/api/users")
 public class UserManagementController {
 
