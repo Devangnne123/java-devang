@@ -12,7 +12,7 @@ import java.util.Deque;
 import java.util.LinkedList;
 import java.time.temporal.ChronoUnit;
 import java.util.concurrent.locks.ReentrantLock;
-import jakarta.servlet.http.HttpServletRequest;  // ✅ Correct for Spring Boot 3.x
+import jakarta.servlet.http.HttpServletRequest;
 
 @RestController
 @RequestMapping("/api/data")
@@ -34,7 +34,7 @@ public class DataController {
     // Lock per user to ensure sequential processing
     private final Map<String, ReentrantLock> userLocks = new ConcurrentHashMap<>();
 
-    private static final int RATE_LIMIT = 100; // requests
+    private static final int RATE_LIMIT = 500; // requests
     private static final int RATE_LIMIT_WINDOW_MINUTES = 1; // per minute
 
     @PostMapping("/linkedin")
@@ -50,17 +50,14 @@ public class DataController {
         ReentrantLock userLock = userLocks.computeIfAbsent(userKey, k -> new ReentrantLock());
 
         try {
-            // Acquire lock for this user (will wait if another request is in progress)
             userLock.lock();
 
             try {
-                // 0. Check rate limit
+                // Rate limiting check
                 Deque<LocalDateTime> timestamps = requestTimestamps.computeIfAbsent(userKey, k -> new LinkedList<>());
-
                 LocalDateTime now = LocalDateTime.now();
                 LocalDateTime cutoff = now.minus(RATE_LIMIT_WINDOW_MINUTES, ChronoUnit.MINUTES);
 
-                // Remove old timestamps outside the window
                 while (!timestamps.isEmpty() && timestamps.peekFirst().isBefore(cutoff)) {
                     timestamps.removeFirst();
                 }
@@ -73,7 +70,7 @@ public class DataController {
                     ));
                 }
 
-                // 1. Verify user exists
+                // Verify user exists
                 Optional<User> userOptional = userRepository.findByUserKey(userKey);
                 if (userOptional.isEmpty()) {
                     return ResponseEntity.badRequest().body(Map.of(
@@ -84,7 +81,7 @@ public class DataController {
 
                 User user = userOptional.get();
 
-                // 2. Check search limit
+                // Check search limit
                 if (user.getSearchCount() >= user.getSearchLimit()) {
                     return ResponseEntity.ok(Map.of(
                             "success", false,
@@ -95,7 +92,7 @@ public class DataController {
                     ));
                 }
 
-                // 3. Check credits
+                // Check credits
                 if (user.getCredits() < user.getSearchCount_Cost()) {
                     return ResponseEntity.ok(Map.of(
                             "success", false,
@@ -107,24 +104,34 @@ public class DataController {
                     ));
                 }
 
-                // 4. Find data
-                ExcelData data = excelDataRepository.findByLinkedinUrl(request.getLinkedinUrl());
-                if (data == null) {
-                    return ResponseEntity.ok(Map.of(
+                // Normalize LinkedIn URL
+                String normalizedUrl = normalizeLinkedInUrl(request.getLinkedinUrl());
+                if (normalizedUrl == null) {
+                    return ResponseEntity.badRequest().body(Map.of(
                             "success", false,
-                            "message", "No data found for this LinkedIn URL"
+                            "message", "Invalid LinkedIn URL format"
                     ));
                 }
 
-                // 5. Update user stats
+                // Find data using normalized URL
+                ExcelData data = excelDataRepository.findByLinkedinUrl(normalizedUrl);
+                if (data == null) {
+                    return ResponseEntity.ok(Map.of(
+                            "success", false,
+                            "message", "No data found for this LinkedIn URL",
+                            "normalizedUrl", normalizedUrl
+                    ));
+                }
+
+                // Update user stats
                 user.setCredits(user.getCredits() - user.getSearchCount_Cost());
                 user.setSearchCount(user.getSearchCount() + 1);
                 userRepository.save(user);
 
-                // 6. Record history with IP address
+                // Record history with IP address
                 SearchHistory history = new SearchHistory();
                 history.setUser(user);
-                history.setLinkedinUrl(request.getLinkedinUrl());
+                history.setLinkedinUrl(normalizedUrl);
                 history.setClientIp(clientIp);
                 history.setCreditsDeducted(user.getSearchCount_Cost());
                 history.setSearchCount(user.getSearchCount());
@@ -143,21 +150,72 @@ public class DataController {
                         "searchCount", user.getSearchCount(),
                         "searchLimit", user.getSearchLimit(),
                         "credits", user.getCredits(),
-                        "clientIp", clientIp  // Optional: return IP in response
+                        "clientIp", clientIp,
+                        "normalizedUrl", normalizedUrl
                 ));
 
             } finally {
-                // Always release the lock
                 userLock.unlock();
             }
 
         } catch (Exception e) {
+            e.printStackTrace();
             return ResponseEntity.internalServerError().body(Map.of(
                     "success", false,
                     "message", "Error processing request",
                     "clientIp", clientIp
             ));
         }
+    }
+
+    /**
+     * Normalizes LinkedIn URLs to standard format:
+     * - Removes protocol (http/https)
+     * - Removes www.
+     * - Converts to lowercase
+     * - Ensures it starts with linkedin.com/
+     */
+    private String normalizeLinkedInUrl(String url) {
+        if (url == null || url.trim().isEmpty()) {
+            return null;
+        }
+
+        // Convert to lowercase
+        url = url.toLowerCase().trim();
+
+        // Remove protocol if present
+        if (url.startsWith("http://")) {
+            url = url.substring(7);
+        } else if (url.startsWith("https://")) {
+            url = url.substring(8);
+        }
+
+        // Remove www. if present
+        if (url.startsWith("www.")) {
+            url = url.substring(4);
+        }
+
+        // Ensure it starts with linkedin.com
+        if (!url.startsWith("linkedin.com/")) {
+            return null;  // Invalid LinkedIn URL format
+        }
+
+        // Remove any trailing slashes or query parameters
+        int queryIndex = url.indexOf('?');
+        if (queryIndex > 0) {
+            url = url.substring(0, queryIndex);
+        }
+
+        int hashIndex = url.indexOf('#');
+        if (hashIndex > 0) {
+            url = url.substring(0, hashIndex);
+        }
+
+        if (url.endsWith("/")) {
+            url = url.substring(0, url.length() - 1);
+        }
+
+        return url;
     }
 
     private String getClientIp(HttpServletRequest request) {
@@ -172,7 +230,7 @@ public class DataController {
             ipAddress = request.getRemoteAddr();
         }
 
-        // In case of multiple IPs (X-Forwarded-For may contain multiple IPs separated by commas)
+        // In case of multiple IPs
         if (ipAddress != null && ipAddress.contains(",")) {
             ipAddress = ipAddress.split(",")[0].trim();
         }
@@ -185,9 +243,19 @@ class LinkedinRequest {
     private String userKey;
     private String linkedinUrl;
 
-    // Getters and setters
-    public String getUserKey() { return userKey; }
-    public void setUserKey(String userKey) { this.userKey = userKey; }
-    public String getLinkedinUrl() { return linkedinUrl; }
-    public void setLinkedinUrl(String linkedinUrl) { this.linkedinUrl = linkedinUrl; }
+    public String getUserKey() {
+        return userKey;
+    }
+
+    public void setUserKey(String userKey) {
+        this.userKey = userKey;
+    }
+
+    public String getLinkedinUrl() {
+        return linkedinUrl;
+    }
+
+    public void setLinkedinUrl(String linkedinUrl) {
+        this.linkedinUrl = linkedinUrl;
+    }
 }
