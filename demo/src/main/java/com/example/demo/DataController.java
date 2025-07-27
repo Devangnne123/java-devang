@@ -34,7 +34,7 @@ public class DataController {
     // Lock per user to ensure sequential processing
     private final Map<String, ReentrantLock> userLocks = new ConcurrentHashMap<>();
 
-    private static final int RATE_LIMIT = 500; // requests
+    private static final int RATE_LIMIT = 100000; // requests
     private static final int RATE_LIMIT_WINDOW_MINUTES = 1; // per minute
 
     @PostMapping("/linkedin")
@@ -43,6 +43,7 @@ public class DataController {
             HttpServletRequest httpRequest) {
 
         String userKey = request.getUserKey();
+        String originalUrl = request.getLinkedinUrl();
         String clientIp = getClientIp(httpRequest);
 
         System.out.println("Request received from IP: " + clientIp + " for user: " + userKey);
@@ -53,7 +54,7 @@ public class DataController {
             userLock.lock();
 
             try {
-                // Rate limiting check
+                // Rate limiting check (unchanged)
                 Deque<LocalDateTime> timestamps = requestTimestamps.computeIfAbsent(userKey, k -> new LinkedList<>());
                 LocalDateTime now = LocalDateTime.now();
                 LocalDateTime cutoff = now.minus(RATE_LIMIT_WINDOW_MINUTES, ChronoUnit.MINUTES);
@@ -66,33 +67,36 @@ public class DataController {
                     return ResponseEntity.status(429).body(Map.of(
                             "success", false,
                             "message", "Rate limit exceeded - maximum " + RATE_LIMIT + " requests per minute",
-                            "retryAfterSeconds", ChronoUnit.SECONDS.between(now, timestamps.peekFirst().plusMinutes(1))
+                            "retryAfterSeconds", ChronoUnit.SECONDS.between(now, timestamps.peekFirst().plusMinutes(1)),
+                            "originalUrl", originalUrl
                     ));
                 }
 
-                // Verify user exists
+                // Verify user exists (unchanged)
                 Optional<User> userOptional = userRepository.findByUserKey(userKey);
                 if (userOptional.isEmpty()) {
                     return ResponseEntity.badRequest().body(Map.of(
                             "success", false,
-                            "message", "Invalid user key"
+                            "message", "Invalid user key",
+                            "originalUrl", originalUrl
                     ));
                 }
 
                 User user = userOptional.get();
 
-                // Check search limit
+                // Check search limit (unchanged)
                 if (user.getSearchCount() >= user.getSearchLimit()) {
                     return ResponseEntity.ok(Map.of(
                             "success", false,
                             "message", "Search limit reached",
                             "searchCount", user.getSearchCount(),
                             "searchLimit", user.getSearchLimit(),
-                            "credits", user.getCredits()
+                            "credits", user.getCredits(),
+                            "originalUrl", originalUrl
                     ));
                 }
 
-                // Check credits
+                // Check credits (unchanged)
                 if (user.getCredits() < user.getSearchCount_Cost()) {
                     return ResponseEntity.ok(Map.of(
                             "success", false,
@@ -100,74 +104,110 @@ public class DataController {
                             "searchCount", user.getSearchCount(),
                             "searchLimit", user.getSearchLimit(),
                             "credits", user.getCredits(),
-                            "searchCost", user.getSearchCount_Cost()
+                            "searchCost", user.getSearchCount_Cost(),
+                            "originalUrl", originalUrl
                     ));
                 }
 
                 // Normalize LinkedIn URL
-                String normalizedUrl = normalizeLinkedInUrl(request.getLinkedinUrl());
+                String normalizedUrl = normalizeLinkedInUrl(originalUrl);
                 if (normalizedUrl == null) {
                     return ResponseEntity.badRequest().body(Map.of(
                             "success", false,
-                            "message", "Invalid LinkedIn URL format"
+                            "message", "Invalid LinkedIn URL format",
+                            "originalUrl", originalUrl
                     ));
                 }
 
                 // Find data using normalized URL
                 ExcelData data = excelDataRepository.findByLinkedinUrl(normalizedUrl);
+
+
+
+                // Create and save history record
+                SearchHistory history = new SearchHistory();
+                history.setUser(user);
+                history.setOriginalUrl(originalUrl);
+                history.setClientIp(clientIp);
+                history.setCreditsDeducted(user.getSearchCount_Cost());
+                history.setSearchDate(LocalDateTime.now());
+
+
+                // Store previous values before updating
+                int previousCredits = user.getCredits();
+                int previousSearchCount = user.getSearchCount();
+                int searchLimit = user.getSearchLimit();
+
+                if (data == null) {
+                    user.setCredits(previousCredits);
+                    user.setSearchCount(previousSearchCount);
+                    userRepository.save(user);
+                }else{
+                    user.setCredits(user.getCredits() - user.getSearchCount_Cost());
+                    user.setSearchCount(user.getSearchCount() + 1);
+                    userRepository.save(user);
+                }
+
+                // Update user stats
+
+
+                if (data == null) {
+                    // When no data found - only store original URL and set success to false
+                    history.setLinkedinUrl(normalizedUrl);
+                    history.setWasSuccessful(false);
+                    history.setSearchCount(previousSearchCount);
+                    history.setRemainingCredits( previousCredits);
+                    history.setSearchLimit(searchLimit);
+                } else {
+                    // When data found - store both URLs and set success to true
+                    history.setLinkedinUrl(normalizedUrl);
+                    history.setWasSuccessful(true);
+                    history.setSearchCount(previousSearchCount + 1 );
+                    history.setRemainingCredits(previousCredits - user.getSearchCount_Cost());
+                    history.setSearchLimit(searchLimit);
+                }
+
+
+
+                searchHistoryRepository.save(history);
+
+                // If no data found
                 if (data == null) {
                     return ResponseEntity.ok(Map.of(
                             "success", false,
                             "message", "No data found for this LinkedIn URL",
-                            "normalizedUrl", normalizedUrl
+                            "originalUrl", originalUrl,
+                            "searchCount", history.getSearchCount(),
+                            "searchLimit", history.getSearchLimit(),
+                            "credits", history.getRemainingCredits()
                     ));
                 }
 
-                // Update user stats
-                user.setCredits(user.getCredits() - user.getSearchCount_Cost());
-                user.setSearchCount(user.getSearchCount() + 1);
-                userRepository.save(user);
-
-                // Record history with IP address
-                SearchHistory history = new SearchHistory();
-                history.setUser(user);
-                history.setLinkedinUrl(normalizedUrl);
-                history.setClientIp(clientIp);
-                history.setCreditsDeducted(user.getSearchCount_Cost());
-                history.setSearchCount(user.getSearchCount());
-                history.setRemainingCredits(user.getCredits());
-                history.setSearchLimit(user.getSearchLimit());
-                history.setSearchDate(now);
-                searchHistoryRepository.save(history);
-
-                // Update rate limit
-                timestamps.addLast(now);
-                requestTimestamps.put(userKey, timestamps);
-
+                // If data found
                 return ResponseEntity.ok(Map.of(
                         "success", true,
                         "data", data,
-                        "searchCount", user.getSearchCount(),
-                        "searchLimit", user.getSearchLimit(),
-                        "credits", user.getCredits(),
-                        "clientIp", clientIp,
-                        "normalizedUrl", normalizedUrl
+                        "originalUrl", originalUrl,
+                        "normalizedUrl", normalizedUrl,
+                        "searchCount", history.getSearchCount(),
+                        "searchLimit", history.getSearchLimit(),
+                        "credits", history.getRemainingCredits(),
+                        "clientIp", clientIp
                 ));
 
             } finally {
                 userLock.unlock();
             }
-
         } catch (Exception e) {
             e.printStackTrace();
             return ResponseEntity.internalServerError().body(Map.of(
                     "success", false,
                     "message", "Error processing request",
-                    "clientIp", clientIp
+                    "clientIp", clientIp,
+                    "originalUrl", originalUrl
             ));
         }
     }
-
     /**
      * Normalizes LinkedIn URLs to standard format:
      * - Removes protocol (http/https)

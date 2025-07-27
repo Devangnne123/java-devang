@@ -51,7 +51,10 @@ public class UserController_H {
                 "creditsDeducted", history.getCreditsDeducted(),
                 "remainingCredits", history.getRemainingCredits(),
                 "searchCount", history.getSearchCount(),
-                "searchLimit", history.getSearchLimit()
+                "searchLimit", history.getSearchLimit(),
+                "originalUrl", history.getOriginalUrl(),
+                "wasSuccessful", history.getWasSuccessful(),
+                "clientIp", history.getClientIp()
         );
     }
 }
