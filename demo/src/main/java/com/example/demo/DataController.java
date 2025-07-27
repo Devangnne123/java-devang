@@ -16,7 +16,7 @@ import jakarta.servlet.http.HttpServletRequest;
 
 @RestController
 @RequestMapping("/api/data")
-@CrossOrigin(origins = "http://13.203.218.236:3001")
+@CrossOrigin(origins = "${cors.allowed-origins}")
 public class DataController {
 
     @Autowired
